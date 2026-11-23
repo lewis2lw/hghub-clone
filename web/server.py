@@ -86,6 +86,11 @@ HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8081"))
 PROXY_BASE = os.environ.get("PROXY_BASE", "http://127.0.0.1:8080").rstrip("/")
 UPSTREAM = os.environ.get("UPSTREAM", "https://huangguoai.com").rstrip("/")
+MEDIA_BASE = os.environ.get("MEDIA_BASE", "").rstrip("/")
+# 媒体直出源：清单里的分片/密钥改写成这个源的 /seg 绝对地址，播放器
+# 直连它取流，绕过页面域名（Cloudflare Worker）的不稳定中转。
+# 为空时退回同源相对 /seg（默认行为不变）。部署时在 systemd 里配，
+# 例如 MEDIA_BASE=https://8081-xxx.instabox.tech（2026-11-23 卡顿优化）。
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 INDEX_PATH = os.path.join(BASE_DIR, "index.html")
 # 方案 B：HGhubX 前端构建产物（web/dist/，由 hghubx-src 的 pnpm build 生成后拷入）。
@@ -891,11 +896,14 @@ def _map_uri_attributes(line, rewrite):
     return f"{tag}:{','.join(mapped)}"
 
 
-def _rewrite_playlist(base_url, text, prefix="", direct=False):
+def _rewrite_playlist(base_url, text, prefix="", media_base=""):
     """按 media/hls.rs rewrite_playlist 逐行改写；prefix 为同源空前缀时
-    生成 /seg?u=... 相对地址；direct=True 时直接返回上游绝对地址，
-    播放器直连 CDN 取分片/密钥，不再经过本站中转（上游回 ACAO:*，
-    跨域直取没问题；分片、清单、密钥三路直连实测 2026-11-23）。"""
+    生成 /seg?u=... 相对地址；media_base 非空时生成
+    {media_base}/seg?u=... 绝对地址，让播放器直连媒体源取流。
+    注意：分片不能直接写上游 CDN 绝对地址——CDN 对带 Origin 头的
+    请求返回 403，而浏览器跨域取流一定带 Origin（2026-11-23 实测），
+    所以分片必须经本站 /seg 中转（本站取上游时不带 Origin）。"""
+    seg_base = f"{media_base}/seg" if media_base else f"{prefix}/seg"
     out = []
     for raw in text.lstrip("\ufeff").splitlines():
         line = raw.rstrip()
@@ -915,20 +923,13 @@ def _rewrite_playlist(base_url, text, prefix="", direct=False):
                     out.append(f"{tag}:{','.join(safe)}")
                 continue
             if "URI" in line.upper() and '"' in line:
-                if direct:
-                    out.append(_map_uri_attributes(
-                        line, lambda uri: _absolutize(base_url, uri)))
-                else:
-                    out.append(_map_uri_attributes(
-                        line, lambda uri: f"{prefix}/seg?u={_hls_enc(_absolutize(base_url, uri))}"))
+                out.append(_map_uri_attributes(
+                    line, lambda uri: f"{seg_base}?u={_hls_enc(_absolutize(base_url, uri))}"))
             else:
                 out.append(line)
         else:
             absolute = _absolutize(base_url, line)
-            if direct:
-                out.append(absolute)
-            else:
-                out.append(f"{prefix}/seg?u={_hls_enc(absolute)}")
+            out.append(f"{seg_base}?u={_hls_enc(absolute)}")
         # 每行以换行结尾（Rust 同款）
     return "\n".join(out) + ("\n" if out else "")
 
@@ -2190,8 +2191,8 @@ class Handler(BaseHTTPRequestHandler):
         if not text.lstrip("\ufeff").startswith("#EXTM3U"):
             self._media_502("响应不是 HLS 播放列表")
             return
-        # 分片/密钥直连 CDN，不再经本站中转（2026-11-23 卡顿优化）
-        rewritten = _rewrite_playlist(final_url, text, prefix="", direct=True)
+        # 分片/密钥经 MEDIA_BASE 直出（设了才生效，否则同源 /seg）
+        rewritten = _rewrite_playlist(final_url, text, prefix="", media_base=MEDIA_BASE)
         _cache_put(PL_CACHE, url, rewritten, 60)
         self._media_send(200, rewritten, "application/vnd.apple.mpegurl", cache="no-store")
 
@@ -2280,7 +2281,7 @@ class Handler(BaseHTTPRequestHandler):
             except UnicodeDecodeError:
                 self._media_502("invalid playlist encoding")
                 return
-            rewritten = _rewrite_playlist(url, text, prefix="", direct=True)
+            rewritten = _rewrite_playlist(url, text, prefix="", media_base=MEDIA_BASE)
             self._media_send(200, rewritten, "application/vnd.apple.mpegurl",
                              cache="no-store")
             return
