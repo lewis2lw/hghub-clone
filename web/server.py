@@ -32,7 +32,10 @@ curl 不带 Referer 也能拉到同样的 200，只是内容是密文）。
 
 路由
 ----
-  GET  /                        -> web/index.html
+  GET  /                        -> web/dist/index.html（方案 B：HGhubX 前端构建产物；
+       dist 缺失时回落 web/index.html 旧版单文件页）
+  GET  /legacy                  -> web/index.html（旧版单文件前端，回滚对照用）
+  GET  /assets/<file>           -> web/dist/assets/<file>（构建产物 JS/CSS）
   GET  /hls.min.js              -> web/hls.min.js（本地 hls.js，不再依赖 CDN）
   GET  /health                  -> {"status": "ok"}
   POST /api/play                -> 反代到 8080 播放代理 POST /api/play
@@ -85,6 +88,11 @@ PROXY_BASE = os.environ.get("PROXY_BASE", "http://127.0.0.1:8080").rstrip("/")
 UPSTREAM = os.environ.get("UPSTREAM", "https://huangguoai.com").rstrip("/")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 INDEX_PATH = os.path.join(BASE_DIR, "index.html")
+# 方案 B：HGhubX 前端构建产物（web/dist/，由 hghubx-src 的 pnpm build 生成后拷入）。
+# / 优先 serving dist/index.html；dist 缺失时回落到旧版单文件 index.html。
+DIST_DIR = os.path.join(BASE_DIR, "dist")
+DIST_INDEX_PATH = os.path.join(DIST_DIR, "index.html")
+DIST_ASSETS_DIR = os.path.join(DIST_DIR, "assets")
 
 USER_AGENT = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36"
 
@@ -1892,11 +1900,44 @@ class Handler(BaseHTTPRequestHandler):
         qs = urllib.parse.parse_qs(parsed.query)
 
         if path in ("/", "/index.html"):
+            # 方案 B：有 dist/ 就 serving HGhubX 新版前端，否则回落旧版单文件页。
+            index_path = DIST_INDEX_PATH if os.path.isfile(DIST_INDEX_PATH) else INDEX_PATH
+            try:
+                with open(index_path, "rb") as f:
+                    self._send(200, f.read(), "text/html; charset=utf-8")
+            except FileNotFoundError:
+                self._json(404, {"status": 0, "msg": "index.html not found"})
+            return
+        if path == "/legacy":
+            # 旧版单文件前端（回滚对照用）：新版出问题时可临时从这里打开旧版。
             try:
                 with open(INDEX_PATH, "rb") as f:
                     self._send(200, f.read(), "text/html; charset=utf-8")
             except FileNotFoundError:
                 self._json(404, {"status": 0, "msg": "index.html not found"})
+            return
+        if path.startswith("/assets/"):
+            # 方案 B：只 serving dist/assets/ 下的构建产物，路径穿越直接 404。
+            name = path[len("/assets/"):]
+            if not name or "/" in name or name.startswith("."):
+                self._json(404, {"status": 0, "msg": "asset not found"})
+                return
+            asset_path = os.path.join(DIST_ASSETS_DIR, name)
+            if not os.path.isfile(asset_path):
+                self._json(404, {"status": 0, "msg": "asset not found"})
+                return
+            ctype = "application/octet-stream"
+            if name.endswith(".js"):
+                ctype = "application/javascript; charset=utf-8"
+            elif name.endswith(".css"):
+                ctype = "text/css; charset=utf-8"
+            elif name.endswith(".svg"):
+                ctype = "image/svg+xml"
+            try:
+                with open(asset_path, "rb") as f:
+                    self._send(200, f.read(), ctype)
+            except FileNotFoundError:
+                self._json(404, {"status": 0, "msg": "asset not found"})
             return
         if path == "/hls.min.js":
             # hls.js 本地化（1.2.0.2）：不再依赖 jsdelivr CDN，APK 内也用同一份。

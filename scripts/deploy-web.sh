@@ -6,9 +6,10 @@
 #   bash scripts/deploy-web.sh     # 再跑这个
 #
 # 做什么：
-#   1. 把 web/index.html + web/server.py 复制到 /root/hghub-web/
+#   1. 把 web/server.py + web/dist/（方案 B：HGhubX 前端构建产物）复制到 /root/hghub-web/
+#      （旧版单文件 web/index.html 也一并复制，服务于 /legacy 回滚对照页）
 #   2. 写 systemd 服务 /etc/systemd/system/hghub-web.service（开机自启）
-#   3. 启动并验证：首页 200、/api/play 反代、/proxy/img 封面解密
+#   3. 启动并验证：首页 200（新版 dist/index.html）、/api/tauri app_boot、/api/play 反代、/proxy/img 封面解密
 #
 # 不会动的东西：80 端口的 Xray、443 端口的 MTProto、8080 的播放代理。
 # 依赖：Python 3（Debian 12/13 自带）、openssl 命令行（Debian 自带）、systemd。
@@ -39,6 +40,13 @@ echo "== 2/4 安装网页到 $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
 cp "$REPO_DIR/web/index.html" "$INSTALL_DIR/index.html"
 cp "$REPO_DIR/web/server.py" "$INSTALL_DIR/server.py"
+if [ -d "$REPO_DIR/web/dist" ]; then
+  rm -rf "$INSTALL_DIR/dist"
+  cp -r "$REPO_DIR/web/dist" "$INSTALL_DIR/dist"
+  echo "   dist/ 已安装（$(du -sh "$INSTALL_DIR/dist" | cut -f1)）"
+else
+  echo "   警告：仓库里没有 web/dist，前端将回落到旧版 index.html" >&2
+fi
 python3 -m py_compile "$INSTALL_DIR/server.py" && echo "   server.py 语法检查通过"
 
 echo "== 3/4 写 systemd 服务（开机自启）"
@@ -69,8 +77,12 @@ systemctl is-active --quiet hghub-web || {
   systemctl status hghub-web --no-pager | head -30 >&2
   exit 1
 }
-echo "   首页："
+echo "   首页（新版）："
 curl -fsS "http://127.0.0.1:$PORT/" -o /dev/null -w "   HTTP %{http_code}\n"
+echo "   /api/tauri app_boot："
+curl -fsS -X POST -H 'Content-Type: application/json' -d '{"cmd":"app_boot","args":{}}' \
+  "http://127.0.0.1:$PORT/api/tauri" | head -c 200
+echo
 echo "   /api/play 反代："
 curl -fsS -X POST -H 'Content-Type: application/json' -d '{"id":12,"ep":1}' \
   "http://127.0.0.1:$PORT/api/play" | head -c 200
