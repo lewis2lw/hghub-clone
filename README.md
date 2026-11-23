@@ -50,7 +50,7 @@ Tauri 2 + React，Fluent 设计）的**网页复刻版**：原作者删库后，
 ```bash
 # 服务器是 Debian/Ubuntu，用 root 登录后：
 apt update && apt install -y git python3 openssl curl
-git clone https://github.com/vps1986/hghub-clone.git
+git clone https://github.com/lewis2lw/hghub-clone.git
 cd hghub-clone
 ```
 
@@ -108,9 +108,10 @@ http://<你的服务器IP>:8081/
 ├── proxy/
 │   └── server.py                # 播放解析代理（8080 端口，Python 标准库）
 ├── web/
-│   ├── index.html               # 复刻版网页本体（单文件：首页/分类/搜索/榜单/
-│   │                            #   帖子/详情/登录/播放器，hls.js 播 HLS）
-│   └── server.py                # 网页服务（8081 端口：静态页 + 反代 + 封面解密）
+│   ├── dist/                    # HGhubX 前端构建产物（方案 B，见第十七节）
+│   ├── index.html               # 旧版复刻网页，现只在 /legacy 提供（回滚用）
+│   └── server.py                # 网页服务（8081 端口：HGhubX 前端 + POST /api/tauri
+│                                #   + /img /hls /seg 媒体路由 + /legacy 旧版）
 ├── android/                     # Android WebView 壳工程（包名 com.hghub.huangguo）
 │   ├── build-apk-manual.sh      # 手动构建 APK 的脚本（不用 Gradle 也能编）
 │   ├── build.gradle             # Gradle 构建配置
@@ -337,9 +338,7 @@ Gradle 构建时用 `-PappUrl=http://YOUR_SERVER_IP:8081/`，
 
 - 本机没有安卓模拟器/真机，**APK 没有做过真机安装和打开测试**；
   播放效果以手机实测为准
-- 线上 8081 的封面修复（`/proxy/img`）是本仓库新加的，
-  服务器上正在跑的旧版 8081 还没有这个接口——部署新版后才生效
-  （跑 `bash scripts/deploy-web.sh` 重新部署即可）
+- 线上 8081 已于 2026-11-23 切到 HGhubX 新版（见第十七节），封面走新版 `/img` 路由（不限域名白名单），旧版 `/proxy/img` 白名单问题随旧版下线而消失
 - iOS Safari 没有 MSE，走原生直连清单，代理帮不上它
 - 上游接口随时可能改版（播放参数、加密协议、域名），
   哪天播不了了，先按第七节的表排查，再去上游网页源码里
@@ -423,8 +422,13 @@ Gradle 构建时用 `-PappUrl=http://YOUR_SERVER_IP:8081/`，
 - **底部导航删掉“帖子”**：只剩 首页/分类/榜单/我的 4 项，均匀分布。帖子页面代码保留（上游接口仍在），只是导航入口删掉。
 - **顶部 logo 可点击回首页**：点 HGhub logo 停掉当前视频、关掉详情/播放弹窗和评论/分享面板，回到首页 feed 顶部。
 
-## 十七、方案 B：前端换成 HGhubX（2026-11-23，进行中）
+## 十七、方案 B：前端换成 HGhubX（2026-11-23，已上线）
 
 - 网页前端由本仓库旧版 `web/index.html` 换成 [HGhubX](https://github.com/zxsos/HGhubX) v2.2.8 的 React 构建产物（`web/dist/`），后端 `web/server.py` 新增 `POST /api/tauri`，等价实现 HGhubX 全部 67 个 Tauri 命令，另有同源 `/img`、`/hls`、`/seg` 媒体路由；旧版保留在 `/legacy`，可随时回滚。
 - HGhubX 源码未进本仓库，只有构建产物；复现构建方法与全部改动见 `PATCHES.md`，许可证全文见 `LICENSE-HGhubX`（PolyForm Noncommercial 1.0.0，仅限非商业用途）。
-- 状态：本地联调已通过，正在 staging 验证，尚未切到线上；上线前先走 staging 端口验证再切 8081。
+- 新版结构：浏览器只跟 8081 说话；前端调 `POST /api/tauri`（命令直通上游），封面走 `/img`、清单走 `/hls`、分片走 `/seg`（同源改写，封面 AES 解密仍在服务端）；播放取流仍经 8080 代理的 `POST /api/play`。首次打开会弹使用条款，勾选同意后进入。
+- 状态：2026-11-23 已切到线上 8081（https://hg.lewis2.qzz.io/），staging（18080/18081）与公网验证全通：首页出视频并正常播放、搜索出结果、详情/播放/封面正常。线上旧版备份在服务器 `/root/hghub-web-backup-20261123`。
+- 上线前修掉一个关键 bug：`/api/tauri` 最初把结果包了一层 `{"ok": true, "data": ...}`，前端按 Tauri 约定要裸结果，读不到 items 导致首页空白、搜索页白屏；已改为成功直接返回结果、失败返回 HTTP 500（提交 f1eccf7）。
+- 构建方法：工作目录是 HGhubX v2.2.8 源码 + 3 处垫片（`PATCHES.md` 有清单），`npx -y pnpm@10 install` 后 `pnpm build`，把 `dist/` 拷进本仓库 `web/dist/` 再提交；`web/server.py` 的 `/` 优先 serve `dist/index.html`，`/legacy` 走旧版。`dist/` 里的 JS 已构建好，改前端必须重新构建，不能只改 `dist/`。
+- 回滚：服务器上把 `/root/hghub-web-backup-20261123` 恢复到 `/root/hghub-web` 并 `systemctl restart hghub-web`；或直接访问 `/legacy` 用旧版。staging（18080/18081）仍在跑新版，可先在那验证再动线上。
+- 未验证：真实账号登录/注册、api_play 旧接口回退分支、post_playback 无视频分支、line_auto 镜像分支——代码已实现但未实测。
