@@ -64,6 +64,12 @@ ALLOWED_HOSTS = {
     "tp1.drleao.cn",
     "tp4.drleao.cn",
     "tp8.drleao.cn",
+    # 上游 CDN 已轮换（2026-11-23 热修复已加到机器上的版本，仓库这里补齐，
+    # 否则从仓库重部署代理后新域名又会被拦）：封面 pic.qnlycc.cn、
+    # 清单 yd-lphu-hls.tjyyjk.cn、分片 tp2.qnlycc.cn
+    "pic.qnlycc.cn",
+    "yd-lphu-hls.tjyyjk.cn",
+    "tp2.qnlycc.cn",
 }
 ALLOWED_SUFFIXES = (".hzjvlo.cn", ".drleao.cn")
 
