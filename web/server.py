@@ -891,9 +891,11 @@ def _map_uri_attributes(line, rewrite):
     return f"{tag}:{','.join(mapped)}"
 
 
-def _rewrite_playlist(base_url, text, prefix=""):
+def _rewrite_playlist(base_url, text, prefix="", direct=False):
     """按 media/hls.rs rewrite_playlist 逐行改写；prefix 为同源空前缀时
-    生成 /seg?u=... 相对地址。"""
+    生成 /seg?u=... 相对地址；direct=True 时直接返回上游绝对地址，
+    播放器直连 CDN 取分片/密钥，不再经过本站中转（上游回 ACAO:*，
+    跨域直取没问题；分片、清单、密钥三路直连实测 2026-11-23）。"""
     out = []
     for raw in text.lstrip("\ufeff").splitlines():
         line = raw.rstrip()
@@ -913,13 +915,20 @@ def _rewrite_playlist(base_url, text, prefix=""):
                     out.append(f"{tag}:{','.join(safe)}")
                 continue
             if "URI" in line.upper() and '"' in line:
-                out.append(_map_uri_attributes(
-                    line, lambda uri: f"{prefix}/seg?u={_hls_enc(_absolutize(base_url, uri))}"))
+                if direct:
+                    out.append(_map_uri_attributes(
+                        line, lambda uri: _absolutize(base_url, uri)))
+                else:
+                    out.append(_map_uri_attributes(
+                        line, lambda uri: f"{prefix}/seg?u={_hls_enc(_absolutize(base_url, uri))}"))
             else:
                 out.append(line)
         else:
             absolute = _absolutize(base_url, line)
-            out.append(f"{prefix}/seg?u={_hls_enc(absolute)}")
+            if direct:
+                out.append(absolute)
+            else:
+                out.append(f"{prefix}/seg?u={_hls_enc(absolute)}")
         # 每行以换行结尾（Rust 同款）
     return "\n".join(out) + ("\n" if out else "")
 
@@ -2181,7 +2190,8 @@ class Handler(BaseHTTPRequestHandler):
         if not text.lstrip("\ufeff").startswith("#EXTM3U"):
             self._media_502("响应不是 HLS 播放列表")
             return
-        rewritten = _rewrite_playlist(final_url, text, prefix="")
+        # 分片/密钥直连 CDN，不再经本站中转（2026-11-23 卡顿优化）
+        rewritten = _rewrite_playlist(final_url, text, prefix="", direct=True)
         _cache_put(PL_CACHE, url, rewritten, 60)
         self._media_send(200, rewritten, "application/vnd.apple.mpegurl", cache="no-store")
 
@@ -2270,7 +2280,7 @@ class Handler(BaseHTTPRequestHandler):
             except UnicodeDecodeError:
                 self._media_502("invalid playlist encoding")
                 return
-            rewritten = _rewrite_playlist(url, text, prefix="")
+            rewritten = _rewrite_playlist(url, text, prefix="", direct=True)
             self._media_send(200, rewritten, "application/vnd.apple.mpegurl",
                              cache="no-store")
             return
