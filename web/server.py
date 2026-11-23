@@ -2020,12 +2020,15 @@ class Handler(BaseHTTPRequestHandler):
                    "proto": self.headers.get("X-Forwarded-Proto") or "http"}
             try:
                 data = _dispatch_tauri(cmd, args, ctx)
-                self._json(200, {"ok": True, "data": data})
+                # 直接返回命令结果本身：Tauri 的 invoke 收到什么，前端就拿到什么，
+                # 不包 {"ok": True, "data": ...} 这一层。之前包了一层，前端把
+                # 整个信封当成命令返回值，items 读不到就全页空白，搜索页直接白屏。
+                self._json(200, data)
             except TauriError as e:
-                self._json(200, {"ok": False, "error": str(e)})
+                self._json(500, {"error": str(e)})
             except Exception as e:
                 log.warning("tauri %s failed: %s", cmd, e)
-                self._json(200, {"ok": False, "error": "请求失败，请检查网络"})
+                self._json(500, {"error": "请求失败，请检查网络"})
             return
         if parsed.path == "/api/play":
             length = int(self.headers.get("Content-Length") or 0)
