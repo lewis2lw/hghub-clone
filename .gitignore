@@ -10,3 +10,10 @@ __pycache__/
 *.pyc
 android/HGhub-*.apk*
 /HGhub-*.apk*
+# 方案 B 本地状态文件：会话 token、线路、代理、安全开关、日志一律不进仓库
+web/session.json
+web/line.json
+web/proxy.json
+web/security.json
+web/trusted_mirrors.json
+web/*.log
