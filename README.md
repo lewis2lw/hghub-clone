@@ -422,3 +422,9 @@ Gradle 构建时用 `-PappUrl=http://YOUR_SERVER_IP:8081/`，
 - **其他图标同比例缩小**：右侧栏按钮 52→44px、详情右侧栏 48→41px、底部导航图标 21→18px、logo 24→21px、静音/分享/关闭图标同步缩小约 15%，保持协调。
 - **底部导航删掉“帖子”**：只剩 首页/分类/榜单/我的 4 项，均匀分布。帖子页面代码保留（上游接口仍在），只是导航入口删掉。
 - **顶部 logo 可点击回首页**：点 HGhub logo 停掉当前视频、关掉详情/播放弹窗和评论/分享面板，回到首页 feed 顶部。
+
+## 十七、方案 B：前端换成 HGhubX（2026-11-23，进行中）
+
+- 网页前端由本仓库旧版 `web/index.html` 换成 [HGhubX](https://github.com/zxsos/HGhubX) v2.2.8 的 React 构建产物（`web/dist/`），后端 `web/server.py` 新增 `POST /api/tauri`，等价实现 HGhubX 全部 67 个 Tauri 命令，另有同源 `/img`、`/hls`、`/seg` 媒体路由；旧版保留在 `/legacy`，可随时回滚。
+- HGhubX 源码未进本仓库，只有构建产物；复现构建方法与全部改动见 `PATCHES.md`，许可证全文见 `LICENSE-HGhubX`（PolyForm Noncommercial 1.0.0，仅限非商业用途）。
+- 状态：本地联调已通过，正在 staging 验证，尚未切到线上；上线前先走 staging 端口验证再切 8081。
